@@ -1,4 +1,5 @@
-﻿using Autodesk.Revit.Attributes;
+﻿using Autodesk.Revit.ApplicationServices;
+using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Architecture;
 using Autodesk.Revit.DB.Structure;
@@ -7,6 +8,8 @@ using Autodesk.Revit.UI.Selection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Emit;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -68,7 +71,7 @@ namespace RevitAPICreateModel
                     AddWindows(doc, level1, walls[1]);
                     AddWindows(doc, level1, walls[2]);
                     AddWindows(doc, level1, walls[3]);
-
+                    AddRoof(doc, level1, walls);
                     ts.Commit();
 
                 }
@@ -85,10 +88,79 @@ namespace RevitAPICreateModel
                 return Result.Failed;
             }
 
-
             return Result.Succeeded;
 
+        }
 
+        private void AddRoof(Document doc, Level level2, List<Wall> walls)
+        {
+            if (walls == null || walls.Count < 4)
+                throw new Exception("Необходимо минимум 4 стены для создания крыши.");
+
+           
+            RoofType roofType = new FilteredElementCollector(doc)
+                .OfClass(typeof(RoofType))
+                .OfType<RoofType>()
+                .Where(x => x.Name.Equals("Типовой - 400мм"))
+                .Where(x => x.FamilyName.Equals("Базовая крыша"))
+                .FirstOrDefault();
+
+            if (roofType == null)
+                throw new Exception("Не найден подходящий тип крыши.");
+
+            double wallWidth = walls[0].Width;
+            double dt = wallWidth / 2;
+
+            
+            List<XYZ> points = new List<XYZ>
+    {
+        new XYZ(dt, -dt, 0),
+        new XYZ(dt, dt, 0),
+        new XYZ(-dt, dt, 0),
+        new XYZ(-dt, -dt, 0),
+        new XYZ(dt, -dt, 0)  
+    };
+
+            
+            Application application = doc.Application;
+            CurveArray curveArray = application.Create.NewCurveArray();
+
+            for (int i = 0; i < 4; i++)
+            {
+                LocationCurve curve = walls[i].Location as LocationCurve;
+                if (curve == null)
+                    throw new Exception($"Стена {i} не содержит LocationCurve.");
+
+                XYZ p1 = curve.Curve.GetEndPoint(0);
+                XYZ p2 = curve.Curve.GetEndPoint(1);
+                Line line = Line.CreateBound(p1 + points[i], p2 + points[i + 1]);
+                curveArray.Append(line);
+            }
+
+            
+            LocationCurve lastCurve = walls[3].Location as LocationCurve;
+            LocationCurve firstCurve = walls[0].Location as LocationCurve;
+
+            if (lastCurve == null || firstCurve == null)
+                throw new Exception("Не удалось получить LocationCurve для последней или первой стены.");
+
+            Line closingLine = Line.CreateBound(
+                lastCurve.Curve.GetEndPoint(1) + points[3],
+                firstCurve.Curve.GetEndPoint(0) + points[0]
+            );
+            curveArray.Append(closingLine);
+
+        
+            
+                    ReferencePlane plane = doc.Create.NewReferencePlane(
+                new XYZ(0, 0, 0),  
+                new XYZ(0, 0, 1), 
+                new XYZ(1, 0, 0),  
+                doc.ActiveView
+            );
+
+            
+            doc.Create.NewExtrusionRoof(curveArray, plane, level2, roofType, -5000, 5000);
         }
 
         private void AddWindows(Document doc, Level level1, Wall wall)
